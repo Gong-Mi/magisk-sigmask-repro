@@ -27,7 +27,7 @@ jobs:
 
       - name: Install NDK + build-tools
         if: steps.ndk-cache.outputs.cache-hit != 'true'
-        run: sdkmanager --install "ndk;27.0.12077973" "build-tools;34.0.0" "platforms;android-34"
+        run: yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --install "ndk;27.0.12077973" "build-tools;34.0.0" "platforms;android-34"
 
       - name: Build blockall (x86_64 bionic)
         run: |
