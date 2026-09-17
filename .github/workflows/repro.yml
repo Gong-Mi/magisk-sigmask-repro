@@ -1,0 +1,73 @@
+name: magisk-sigmask-repro
+
+on:
+  push:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Cache NDK
+        uses: actions/cache@v4
+        id: ndk-cache
+        with:
+          path: /usr/local/lib/android/sdk/ndk
+          key: ndk-27.0.12077973
+
+      - name: Install NDK + build-tools
+        if: steps.ndk-cache.outputs.cache-hit != 'true'
+        run: sdkmanager --install "ndk;27.0.12077973" "build-tools;34.0.0" "platforms;android-34"
+
+      - name: Build blockall (x86_64 bionic)
+        run: |
+          CLANG=$ANDROID_SDK_ROOT/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android34-clang
+          $CLANG -O2 -Wall -o blockall blockall.c
+
+      - name: Build ART probe dex
+        run: |
+          mkdir -p dexout
+          javac --release 8 -d dexout P.java
+          $ANDROID_SDK_ROOT/build-tools/34.0.0/d8 --min-api 30 --output . dexout/P.class
+          mv classes.dex p.dex
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: probes
+          path: |
+            blockall
+            p.dex
+            run_tests.sh
+
+  emulator:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: probes
+          path: probes
+
+      - name: Run tests on Android emulator (API 34 x86_64)
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          arch: x86_64
+          emulator-options: -no-snapshot-save -noaudio -no-boot-anim
+          script: |
+            adb push probes/blockall /data/local/tmp/blockall
+            adb push probes/p.dex /data/local/tmp/p.dex
+            adb push probes/run_tests.sh /data/local/tmp/run_tests.sh
+            adb shell chmod 755 /data/local/tmp/blockall /data/local/tmp/run_tests.sh
+            OUT=$(adb shell "sh /data/local/tmp/run_tests.sh" 2>&1 || true)
+            echo "$OUT"
+            echo "$OUT" | grep -q 'RESULT:REPRODUCED'
