@@ -15,7 +15,8 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - uses: android-actions/setup-android@v3
+      # ubuntu runner image already ships Android SDK + sdkmanager; do NOT use
+      # android-actions/setup-android (its default 'tools' package no longer exists)
 
       - name: Cache NDK
         uses: actions/cache@v4
