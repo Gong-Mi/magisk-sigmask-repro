@@ -62,7 +62,15 @@ jobs:
       - name: Install libpulse0
         run: sudo apt-get update -qq && sudo apt-get install -y -qq libpulse0
 
-      - name: Run tests on Android emulator (API 30 x86_64, TCG)
+      # /dev/kvm exists on the runner but the kvm group has no members
+      - name: Enable KVM access
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          ls -l /dev/kvm
+
+      - name: Run tests on Android emulator (API 30 x86_64)
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
