@@ -31,7 +31,7 @@ jobs:
 
       - name: Build blockall (x86_64 bionic)
         run: |
-          CLANG=$ANDROID_SDK_ROOT/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android34-clang
+          CLANG=$ANDROID_SDK_ROOT/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android30-clang
           $CLANG -O2 -Wall -o blockall blockall.c
 
       - name: Build ART probe dex
@@ -58,11 +58,16 @@ jobs:
           name: probes
           path: probes
 
-      - name: Run tests on Android emulator (API 34 x86_64)
+      # emulator binary links libpulse; ubuntu-24.04 runner image lacks it
+      - name: Install libpulse0
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq libpulse0
+
+      - name: Run tests on Android emulator (API 30 x86_64, TCG)
         uses: reactivecircus/android-emulator-runner@v2
         with:
-          api-level: 34
+          api-level: 30
           arch: x86_64
+          emulator-boot-timeout: 1800
           emulator-options: -no-snapshot-save -noaudio -no-boot-anim
           script: |
             adb push probes/blockall /data/local/tmp/blockall
