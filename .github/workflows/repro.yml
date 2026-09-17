@@ -29,10 +29,11 @@ jobs:
         if: steps.ndk-cache.outputs.cache-hit != 'true'
         run: yes | $ANDROID_SDK_ROOT/cmdline-tools/latest/bin/sdkmanager --install "ndk;27.0.12077973" "build-tools;34.0.0" "platforms;android-34"
 
-      - name: Build blockall (x86_64 bionic)
+      - name: Build blockall (x86_64 + arm64 bionic)
         run: |
-          CLANG=$ANDROID_SDK_ROOT/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android30-clang
-          $CLANG -O2 -Wall -o blockall blockall.c
+          TC=$ANDROID_SDK_ROOT/ndk/27.0.12077973/toolchains/llvm/prebuilt/linux-x86_64/bin
+          $TC/x86_64-linux-android30-clang -O2 -Wall -o blockall blockall.c
+          $TC/aarch64-linux-android30-clang -O2 -Wall -o blockall.arm64 blockall.c
 
       - name: Build ART probe dex
         run: |
@@ -46,39 +47,37 @@ jobs:
           name: probes
           path: |
             blockall
+            blockall.arm64
             p.dex
             run_tests.sh
 
   emulator:
     needs: build
-    runs-on: ubuntu-latest
+    # ubuntu runners here have no usable KVM (nested virt unavailable) and
+    # modern emulator x86_64 images refuse TCG. Apple Silicon macOS runners
+    # use hypervisor.framework — arm64 image boots with native acceleration.
+    runs-on: macos-14
     steps:
       - uses: actions/download-artifact@v4
         with:
           name: probes
           path: probes
 
-      # emulator binary links libpulse; ubuntu-24.04 runner image lacks it
-      - name: Install libpulse0
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq libpulse0
-
-      # /dev/kvm exists on the runner but the kvm group has no members
-      - name: Enable KVM access
-        run: |
-          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
-          sudo udevadm control --reload-rules
-          sudo udevadm trigger --name-match=kvm
-          ls -l /dev/kvm
-
-      - name: Run tests on Android emulator (API 30 x86_64)
+      - name: Run tests on Android emulator (API 30 arm64-v8a)
         uses: reactivecircus/android-emulator-runner@v2
         with:
           api-level: 30
-          arch: x86_64
-          emulator-boot-timeout: 1800
+          arch: arm64-v8a
+          emulator-boot-timeout: 1200
           emulator-options: -no-snapshot-save -noaudio -no-boot-anim
           script: |
-            adb push probes/blockall /data/local/tmp/blockall
+            ABI=$(adb shell getprop ro.product.cpu.abi | tr -d '\r')
+            echo "device ABI: $ABI"
+            case "$ABI" in
+              arm64-v8a) BIN=probes/blockall.arm64 ;;
+              *) BIN=probes/blockall ;;
+            esac
+            adb push $BIN /data/local/tmp/blockall
             adb push probes/p.dex /data/local/tmp/p.dex
             adb push probes/run_tests.sh /data/local/tmp/run_tests.sh
             adb shell chmod 755 /data/local/tmp/blockall /data/local/tmp/run_tests.sh
