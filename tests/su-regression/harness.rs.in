@@ -1,0 +1,128 @@
+// Generated with verbatim control-flow slices from the selected Magisk source.
+// The shims adapt path/diagnostic types only; poll, File and Command are real.
+use std::fs::{File, OpenOptions};
+use std::io::{self, Read, Write};
+use std::os::fd::AsFd;
+use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::process::CommandExt;
+use std::process::{Command, exit};
+use nix::fcntl::OFlag;
+use nix::poll::{PollFd, PollFlags, PollTimeout};
+use nix::sys::signal::{SigSet, Signal};
+
+trait CheckOsErr<T> {
+    fn check_os_err(self, _: &str, _: Option<&str>, _: Option<&str>) -> io::Result<()>;
+    fn into_os_result(self, _: &str, _: Option<&str>, _: Option<&str>) -> io::Result<T>;
+}
+impl<T> CheckOsErr<T> for nix::Result<T> {
+    fn check_os_err(self, _: &str, _: Option<&str>, _: Option<&str>) -> io::Result<()> {
+        self.map(|_| ()).map_err(Into::into)
+    }
+    fn into_os_result(self, _: &str, _: Option<&str>, _: Option<&str>) -> io::Result<T> {
+        self.map_err(Into::into)
+    }
+}
+trait BytesExt { fn contains(&self, needle: &[u8]) -> bool; }
+impl BytesExt for Vec<u8> {
+    fn contains(&self, needle: &[u8]) -> bool { self.windows(needle.len()).any(|v| v == needle) }
+}
+struct Fifo(String);
+impl Fifo {
+    fn open(&self, flags: OFlag) -> io::Result<File> {
+        OpenOptions::new().read(true).write(true).custom_flags(flags.bits()).open(&self.0)
+    }
+}
+macro_rules! log_err { ($($arg:tt)*) => { Err(io::Error::other(format!($($arg)*))) }; }
+
+@@APP_PROCESS@@
+
+fn provider_success(cmd: &mut Command) -> bool {
+@@PROVIDER@@
+    false
+}
+
+fn wait_fifo(fifo: &Fifo) -> io::Result<File> {
+@@FIFO@@
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = std::env::args().collect();
+    match args.get(1).map(String::as_str) {
+        Some("mask-child") => {
+            let mask = SigSet::thread_get_mask()?;
+            println!("SEGV={} BUS={} USR1={}", mask.contains(Signal::SIGSEGV),
+                mask.contains(Signal::SIGBUS), mask.contains(Signal::SIGUSR1));
+        }
+        Some("check-mask") => {
+            let original = SigSet::thread_get_mask()?;
+            SigSet::all().thread_set_mask()?;
+            let output = app_process().arg("mask-child").output();
+            let parent_still_blocked = SigSet::thread_get_mask()?.contains(Signal::SIGUSR1);
+            original.thread_set_mask()?;
+            let output = output?;
+            print!("{}", String::from_utf8_lossy(&output.stdout));
+            assert!(output.status.success());
+            assert!(parent_still_blocked, "do not unblock the daemon parent");
+            assert_eq!(output.stdout, b"SEGV=false BUS=false USR1=false\n");
+        }
+        Some("provider-child") => {
+            match args[2].as_str() {
+                "success" => println!("Result: Bundle[ok]"),
+                "empty-success" => {},
+                "failure" => exit(5),
+                "signal" => unsafe { libc::raise(libc::SIGKILL); },
+                "error-text" => println!("Error: unknown URI"),
+                "stderr-error" => eprintln!("Error: unavailable"),
+                _ => panic!("unknown provider mode"),
+            }
+        }
+        Some("check-provider") => {
+            let mode = &args[2];
+            let expected = matches!(mode.as_str(), "success" | "empty-success");
+            let mut cmd = Command::new(std::env::current_exe()?);
+            cmd.args(["provider-child", mode]);
+            assert_eq!(provider_success(&mut cmd), expected, "provider mode={mode}");
+        }
+        Some("check-fifo") => {
+            let fifo = Fifo(args[2].clone());
+            let mode = &args[3];
+            if mode != "timeout" {
+                let _keepalive = OpenOptions::new().read(true).write(true).open(&fifo.0)?;
+                let mut writer = OpenOptions::new().read(true).write(true).open(&fifo.0)?;
+                let policy: i32 = if mode == "deny" { 1 } else { 2 };
+                let delayed = mode == "delayed";
+                let thread = std::thread::spawn(move || -> io::Result<()> {
+                    if delayed { std::thread::sleep(std::time::Duration::from_millis(20)); }
+                    writer.write_all(&policy.to_be_bytes())
+                });
+                let mut reader = wait_fifo(&fifo)?;
+                let mut value = [0; 4];
+                reader.read_exact(&mut value)?;
+                thread.join().expect("writer panicked")?;
+                assert_eq!(i32::from_be_bytes(value), policy);
+                println!("reply={policy}");
+            } else {
+                let started = std::time::Instant::now();
+                match wait_fifo(&fifo) {
+                    Err(err) => {
+                        assert_eq!(err.to_string(), "su: no authorization response");
+                        assert!(started.elapsed() >= std::time::Duration::from_millis(80),
+                            "setup/early error is not a poll timeout");
+                        println!("timeout rejected before blocking read");
+                    }
+                    Ok(mut reader) => {
+                        println!("BUG: poll timeout accepted; entering blocking read");
+                        io::stdout().flush()?;
+                        // Mirrors app_request: remove pathname, then read_decodable::<i32>.
+                        std::fs::remove_file(&fifo.0)?;
+                        let mut value = [0; 4];
+                        reader.read_exact(&mut value)?;
+                        panic!("unexpected policy after no-response timeout");
+                    }
+                }
+            }
+        }
+        _ => panic!("unknown scenario"),
+    }
+    Ok(())
+}
