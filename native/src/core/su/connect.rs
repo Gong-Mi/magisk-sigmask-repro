@@ -7,6 +7,7 @@ use crate::socket::IpcRead;
 use ExtraVal::{Bool, Int, IntList, Str};
 use base::{
     BytesExt, FileAttr, LibcReturn, LoggedResult, ResultExt, Utf8CStrBuf, cstr, error, fork_dont_care,
+    log_err,
 };
 use nix::fcntl::OFlag;
 use nix::poll::{PollFd, PollFlags, PollTimeout};
@@ -216,11 +217,19 @@ impl SuAppContext<'_> {
             let mut pfd = [PollFd::new(fd.as_fd(), PollFlags::POLLIN)];
 
             // Wait for data input for at most 70 seconds
-            nix::poll::poll(
+            let ready = nix::poll::poll(
                 &mut pfd,
                 PollTimeout::try_from(70 * 1000).unwrap_or(PollTimeout::NONE),
             )
-            .check_os_err("poll", None, None)?;
+            .into_os_result("poll", None, None)?;
+            if ready == 0
+                || !pfd[0]
+                    .revents()
+                    .unwrap_or(PollFlags::empty())
+                    .contains(PollFlags::POLLIN)
+            {
+                return Err(log_err!("su: no authorization response"));
+            }
             Ok(fd)
         }();
 
