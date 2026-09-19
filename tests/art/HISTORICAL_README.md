@@ -1,3 +1,9 @@
+> ARCHIVED HISTORICAL NOTES — not current conclusions. The hang-only oracle
+> and claims below were superseded: blocked SIGSEGV may terminate with 139;
+> PR #10108 already fixed the signal mask and async launch on current upstream.
+> See ../../docs/su-validation.md for current evidence. The archived workflow
+> is intentionally inactive, not proof that an emulator reproduction passed.
+
 # Magisk v30.3+ Rust 迁移信号屏蔽回归 — CI 实证
 
 上游问题：topjohnwu/Magisk 自 cd0eca20b039（"Migrate connect.cpp to Rust"）

@@ -1,0 +1,54 @@
+name: SU source validation
+
+on:
+  push:
+    branches: ['work/su-validation']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          submodules: recursive
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '25'
+      - name: Install official ONDK
+        run: python3 build.py -v ndk
+      - name: Record exact source identity
+        run: |
+          mkdir -p verification
+          git rev-parse HEAD > verification/head.txt
+          git diff --exit-code 6d391dd5b1904122dae315bf2c07e100827c86ef -- app scripts build.py native/src/base
+          sha256sum native/src/core/su/connect.rs > verification/source.sha256
+      - name: RED, independent-fix ablation, GREEN, withdrawal
+        env:
+          MAGISK_TOOL_PREFIX: python3 scripts/env.py
+        run: python3 tests/su-regression/matrix.py --repo . --output verification/source-matrix
+      - name: Generate official FFI and build flags
+        run: python3 build.py -v gen
+      - name: Build real Magisk native executable for all default ABIs
+        run: python3 build.py -v native magisk
+      - name: Validate native artifacts
+        run: |
+          python3 tests/su-regression/check_artifacts.py native/out verification/artifacts.json
+      - name: Upload verification evidence and native executables
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: su-validation-${{ github.sha }}
+          if-no-files-found: error
+          path: |
+            verification/
+            native/out/arm64-v8a/magisk
+            native/out/armeabi-v7a/magisk
+            native/out/x86/magisk
+            native/out/x86_64/magisk
