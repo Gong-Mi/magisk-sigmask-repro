@@ -228,7 +228,7 @@ impl SuAppContext<'_> {
                     .unwrap_or(PollFlags::empty())
                     .contains(PollFlags::POLLIN)
             {
-                return Err(log_err!("su: no authorization response"));
+                return log_err!("su: no authorization response");
             }
             Ok(fd)
         }();
