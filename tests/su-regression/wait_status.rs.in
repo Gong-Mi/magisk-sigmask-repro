@@ -1,0 +1,62 @@
+// Production waitpid/result block is inserted verbatim at @@WAIT@@.
+// Real children, real wait statuses; no simulated waitpid or WEXITSTATUS.
+use std::io;
+
+fn wait_code(child: libc::pid_t) -> i32 {
+@@WAIT@@
+    code
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args: Vec<String> = std::env::args().collect();
+    let mode = args.get(1).expect("case").as_str();
+    if mode == "not-a-child" {
+        let actual = wait_code(unsafe { libc::getpid() });
+        println!("not-a-child actual={actual}");
+        assert_eq!(actual, -1);
+        return Ok(());
+    }
+    let (exit_code, signal) = match mode {
+        "exit0" => (0, 0),
+        "exit7" => (7, 0),
+        "exit255" => (255, 0),
+        "term" => (0, libc::SIGTERM),
+        "kill" => (0, libc::SIGKILL),
+        "int" => (0, libc::SIGINT),
+        _ => panic!("unknown case"),
+    };
+    // Match the daemon worker mask. Only async-signal-safe syscalls in child.
+    let mut all = unsafe { std::mem::zeroed::<libc::sigset_t>() };
+    let mut old = unsafe { std::mem::zeroed::<libc::sigset_t>() };
+    unsafe {
+        assert_eq!(libc::sigfillset(&mut all), 0);
+        assert_eq!(libc::pthread_sigmask(libc::SIG_SETMASK, &all, &mut old), 0);
+    }
+    let child = unsafe { libc::fork() };
+    if child == 0 {
+        unsafe {
+            if signal != 0 {
+                let mut empty = std::mem::zeroed::<libc::sigset_t>();
+                libc::sigemptyset(&mut empty);
+                libc::sigprocmask(libc::SIG_SETMASK, &empty, std::ptr::null_mut());
+                libc::signal(signal, libc::SIG_DFL);
+                libc::kill(libc::getpid(), signal);
+                libc::_exit(99); // returning here would invalidate the signal test
+            }
+            libc::_exit(exit_code);
+        }
+    }
+    if child < 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    let actual = wait_code(child);
+    unsafe { assert_eq!(libc::pthread_sigmask(libc::SIG_SETMASK, &old, std::ptr::null_mut()), 0); }
+    // Prove wait_code reaped the exact child, not just fabricated a result.
+    let mut discarded = 0;
+    assert_eq!(unsafe { libc::waitpid(child, &mut discarded, libc::WNOHANG) }, -1);
+    assert_eq!(io::Error::last_os_error().raw_os_error(), Some(libc::ECHILD));
+    let expected = if signal == 0 { exit_code } else { 128 + signal };
+    println!("case={mode} expected={expected} actual={actual} reaped=true");
+    assert_eq!(actual, expected, "wait status contract: {mode}");
+    Ok(())
+}

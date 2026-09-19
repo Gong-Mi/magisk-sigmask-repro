@@ -2,7 +2,7 @@ name: SU source validation
 
 on:
   push:
-    branches: ['work/su-validation']
+    branches: ['work/su-validation', 'fix/su-wait-status']
   workflow_dispatch:
 
 permissions:
@@ -28,11 +28,15 @@ jobs:
           mkdir -p verification
           git rev-parse HEAD > verification/head.txt
           git diff --exit-code 6d391dd5b1904122dae315bf2c07e100827c86ef -- app scripts build.py native/src/base
-          sha256sum native/src/core/su/connect.rs > verification/source.sha256
+          sha256sum native/src/core/su/connect.rs native/src/core/su/daemon.rs > verification/source.sha256
       - name: RED, independent-fix ablation, GREEN, withdrawal
         env:
           MAGISK_TOOL_PREFIX: python3 scripts/env.py
         run: python3 tests/su-regression/matrix.py --repo . --output verification/source-matrix
+      - name: Wait status RED, GREEN, withdrawal with real children
+        env:
+          MAGISK_TOOL_PREFIX: python3 scripts/env.py
+        run: python3 tests/su-regression/wait_status.py --repo . --output verification/wait-status
       - name: Generate official FFI and build flags
         run: python3 build.py -v gen
       - name: Build real Magisk native executable for all default ABIs
