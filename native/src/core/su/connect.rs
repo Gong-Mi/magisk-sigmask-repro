@@ -136,6 +136,7 @@ impl SuAppContext<'_> {
             cmd.env("CLASSPATH", "/system/framework/content.jar");
 
             if let Ok(output) = cmd.output()
+                && output.status.success()
                 && !output.stderr.contains(b"Error")
                 && !output.stdout.contains(b"Error")
             {
